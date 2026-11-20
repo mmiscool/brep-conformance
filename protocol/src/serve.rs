@@ -8,7 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use serde_json::{Value, json};
 
 use crate::model::{Op, Primitive};
-use crate::{FUNCTIONS, Kernel, Motion, PROTOCOL_VERSION, Refusal};
+use crate::{FUNCTIONS, Kernel, PROTOCOL_VERSION, Refusal};
 
 fn op(v: &Value) -> Result<Op, Refusal> {
     match v.as_str() {
@@ -171,7 +171,7 @@ fn answer<K: Kernel>(
             )?));
         }
         "sweep_solid" => {
-            let m = Motion::from_json(&req["motion"]).map_err(|e| format!("motion: {e}"))?;
+            let m = crate::wire::motion(&req["motion"])?;
             k.sweep_solid(solid("s")?, &m)?
         }
         "transform" => {

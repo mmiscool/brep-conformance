@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use crate::Refusal;
 use crate::model::{Frame, PathSeg, Primitive, Spline, Vec3};
 use crate::motion::Motion;
 use crate::path::PathCurve;
@@ -63,42 +64,51 @@ fn spline3(v: &Value) -> Result<PathCurve, String> {
     })
 }
 
+/// A motion of a kind this version does not know is one the adapter cannot do, and any other
+/// misreading a request at fault.
+pub(crate) fn motion(v: &Value) -> Result<Motion, Refusal> {
+    let failed = |e: String| Refusal::failed(format!("motion: {e}"));
+    if let Some(d) = v.get("slide") {
+        return Ok(Motion::Slide {
+            vector: vec3(d).map_err(failed)?,
+        });
+    }
+    if let Some(t) = v.get("turn") {
+        return Ok(Motion::Turn {
+            origin: vec3(&t["origin"]).map_err(failed)?,
+            axis: vec3(&t["axis"]).map_err(failed)?,
+            angle: num(t, "angle").map_err(failed)?,
+        });
+    }
+    if let Some(s) = v.get("screw") {
+        return Ok(Motion::Screw {
+            origin: vec3(&s["origin"]).map_err(failed)?,
+            axis: vec3(&s["axis"]).map_err(failed)?,
+            rise: num(s, "rise").map_err(failed)?,
+            angle: num(s, "angle").map_err(failed)?,
+        });
+    }
+    let Some(pair) = v.get("then") else {
+        return Err(match v.as_object() {
+            Some(o) if !o.is_empty() => Refusal::unsupported(format!(
+                "unknown motion `{}`",
+                o.keys().next().map_or("", String::as_str)
+            )),
+            _ => failed("a motion is a `slide`, a `turn`, a `screw` or a `then`".into()),
+        });
+    };
+    let [first, second] = pair.as_array().map_or(&[][..], Vec::as_slice) else {
+        return Err(failed("a `then` is two motions".into()));
+    };
+    Ok(Motion::Then(
+        Box::new(motion(first)?),
+        Box::new(motion(second)?),
+    ))
+}
+
 impl Motion {
     pub fn from_json(v: &Value) -> Result<Motion, String> {
-        if let Some(d) = v.get("slide") {
-            return Ok(Motion::Slide { vector: vec3(d)? });
-        }
-        if let Some(t) = v.get("turn") {
-            return Ok(Motion::Turn {
-                origin: vec3(&t["origin"])?,
-                axis: vec3(&t["axis"])?,
-                angle: num(t, "angle")?,
-            });
-        }
-        if let Some(s) = v.get("screw") {
-            return Ok(Motion::Screw {
-                origin: vec3(&s["origin"])?,
-                axis: vec3(&s["axis"])?,
-                rise: num(s, "rise")?,
-                angle: num(s, "angle")?,
-            });
-        }
-        if let Some(a) = v.get("along") {
-            return Ok(Motion::Along {
-                path: spline3(&a["path"])?,
-                up: vec3(&a["up"])?,
-            });
-        }
-        let pair = v
-            .get("then")
-            .ok_or("a motion is a `slide`, a `turn`, a `screw`, an `along` or a `then`")?;
-        let [first, second] = pair.as_array().map_or(&[][..], Vec::as_slice) else {
-            return Err("a `then` is two motions".into());
-        };
-        Ok(Motion::Then(
-            Box::new(Motion::from_json(first)?),
-            Box::new(Motion::from_json(second)?),
-        ))
+        motion(v).map_err(|e| e.reason)
     }
 }
 

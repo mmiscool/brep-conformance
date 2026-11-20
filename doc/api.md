@@ -89,7 +89,7 @@ request and `<` marks its reply.
 ```text
 > {"cmd": "hello"}
 < {"ok": {"name": "example-kernel", "version": "1.2.0", "tolerance": 1e-7,
-   "configuration": "", "protocol": "1.0.0",
+   "configuration": "", "protocol": "1.1.0",
    "supports": ["box", "cylinder", "intersection", "volume", "check"]}}
 > {"cmd": "box", "frame": {"origin": [0, 0, 0], "x": [1, 0, 0], "y": [0, 1, 0], "z": [0, 0, 1]},
    "size": [10, 10, 10]}
@@ -116,7 +116,8 @@ raises the patch number. Any other change raises the major number.
 A client and an adapter work together when their major versions agree. A client stops when an
 adapter's major version differs from the client's own.
 
-An adapter ignores fields it does not know. A command it does not know is refused as `unsupported`.
+An adapter ignores fields it does not know. A command it does not know is refused as `unsupported`,
+and so is a `Motion` of a kind it does not know.
 
 ### Implementations
 
@@ -174,7 +175,6 @@ A `Motion` is one of:
 | `slide` | `{slide: Vector3}`                                                     | Straight by the vector, whose length is in mm   |
 | `turn`  | `{turn: {origin: Point3, axis: Vector3, angle: Angle}}`                | About an axis by `angle`                        |
 | `screw` | `{screw: {origin: Point3, axis: Vector3, rise: Length, angle: Angle}}` | About an axis by `angle`, moving along the axis |
-| `along` | `{along: {path: Spline3, up: Vector3}}`                                | In a frame that rides `path` from end to end    |
 | `then`  | `{then: Motion[2]}`                                                    | The first motion, moved by the second           |
 
 A `spline` segment's `ctrl` lists the `n` points of one period, followed by the first `degree` of
@@ -228,12 +228,6 @@ where it is.
   `angle` may have either sign.
 - A `screw` turns as a `turn` does, and also moves each point `rise·τ·angle` along `axis`. `rise` is
   per radian, as it is in [`screw`](#screw), and may have either sign.
-- An `along` carries each point with a frame that rides `path`. At the path's point `γ(t)` the
-  frame's origin is `γ(t)`, its x axis is the path's unit tangent `T`, its z axis is the unit vector
-  along `up − (up·T)·T`, and its y axis is `z × x`. Let `F(t)` be the rigid motion that takes the
-  world's origin and axes to that frame. Then `M(τ) = F(t)·F(t₀)⁻¹`, with `t` running evenly from
-  the start `t₀` of the path's parameter range to its end. The path's tangent must never be zero or
-  parallel to `up`.
 - A `then` of the motions `P` and `Q` is `M(τ) = Q(τ)·P(τ)`: each point goes where `P` puts it at
   `τ`, and is then moved by `Q` at the same `τ`.
 

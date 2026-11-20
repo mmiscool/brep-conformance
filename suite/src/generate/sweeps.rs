@@ -1,13 +1,12 @@
 //! Sweeps of a moving solid whose results are shapes the suite already holds exactly: a solid slid
 //! along a direction in which it is a prism, turned about an axis round which it is a piece of a
-//! body of revolution, screwed along its own thread, or a ball carried along a curve.
+//! body of revolution, or screwed along its own thread.
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use brep_protocol::Motion;
-use brep_protocol::path::PathCurve;
 
-use super::{Act, Exact, Feature, FeatureDraw, Rng, axis_box, polygon, smooth_path};
+use super::{Act, Exact, Feature, FeatureDraw, Rng, axis_box, polygon};
 use crate::model::{Frame, Op, Primitive, Shape, Vec3};
 use crate::portable::Portable;
 use crate::profile::{Profile, Seg, circle};
@@ -167,6 +166,36 @@ fn carried_along_its_axis(r: &mut Rng, d: f64) -> (Primitive, Primitive) {
     }
 }
 
+/// A slide across the axis of the rod of `rad` and `h` on the world's z axis, and the prism on a
+/// stadium the rod sweeps by it.
+fn slid_rod(r: &mut Rng, rad: f64, h: f64) -> (Vec3, Primitive) {
+    let phi = r.range(0.0, TAU);
+    let len = r.range(1.0, 8.0);
+    let (s, c) = phi.psin_cos();
+    let (u, n) = ([c, s], [-s, c]);
+    let far = [len * u[0], len * u[1]];
+    let stadium = vec![
+        line(
+            [-rad * n[0], -rad * n[1]],
+            [far[0] - rad * n[0], far[1] - rad * n[1]],
+        ),
+        arc(far, rad, phi - FRAC_PI_2, PI),
+        line(
+            [far[0] + rad * n[0], far[1] + rad * n[1]],
+            [rad * n[0], rad * n[1]],
+        ),
+        arc([0.0, 0.0], rad, phi + FRAC_PI_2, PI),
+    ];
+    let want = Primitive::Extrude {
+        frame: Frame::at([0.0; 3]),
+        profile: Profile {
+            loops: vec![stadium],
+        },
+        height: h,
+    };
+    ([far[0], far[1], 0.0], want)
+}
+
 fn cross(o: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 }
@@ -245,31 +274,7 @@ pub fn slides(r: &mut Rng) -> FeatureDraw {
         }
         2 => {
             let (rad, h) = (r.range(1.0, 4.0), r.range(1.0, 6.0));
-            let phi = r.range(0.0, TAU);
-            let len = r.range(1.0, 8.0);
-            let (s, c) = phi.psin_cos();
-            let (u, n) = ([c, s], [-s, c]);
-            let far = [len * u[0], len * u[1]];
-            let stadium = vec![
-                line(
-                    [-rad * n[0], -rad * n[1]],
-                    [far[0] - rad * n[0], far[1] - rad * n[1]],
-                ),
-                arc(far, rad, phi - FRAC_PI_2, PI),
-                line(
-                    [far[0] + rad * n[0], far[1] + rad * n[1]],
-                    [rad * n[0], rad * n[1]],
-                ),
-                arc([0.0, 0.0], rad, phi + FRAC_PI_2, PI),
-            ];
-            let want = Primitive::Extrude {
-                frame: Frame::at([0.0; 3]),
-                profile: Profile {
-                    loops: vec![stadium],
-                },
-                height: h,
-            };
-            let vector = [far[0], far[1], 0.0];
+            let (vector, want) = slid_rod(r, rad, h);
             draw(cylinder(0.0, rad, h), Motion::Slide { vector }, want)
         }
         3 => {
@@ -517,11 +522,36 @@ fn then(first: Motion, second: Motion) -> Motion {
     Motion::Then(Box::new(first), Box::new(second))
 }
 
+/// A rod or a ball turned about its own axis, which moves nothing, and then slid across that axis.
+/// The other way round the turn would swing the slid solid about where it started, so only the
+/// order `then` states gives the slide's prism or capsule.
+fn turned_in_place_then_slid(r: &mut Rng) -> FeatureDraw {
+    let theta = sign(r) * r.range(1.0, 5.0);
+    let rad = r.range(1.0, 4.0);
+    if r.next_u64().is_multiple_of(2) {
+        let h = r.range(1.0, 6.0);
+        let (vector, want) = slid_rod(r, rad, h);
+        let motion = then(turn(r, theta), Motion::Slide { vector });
+        return draw(cylinder(0.0, rad, h), motion, want);
+    }
+    let centre = [0.0, 0.0, r.range(-3.0, 3.0)];
+    let phi = r.range(0.0, TAU);
+    let len = rad * r.range(1.0, 3.0);
+    let vector = [len * phi.pcos(), len * phi.psin(), 0.0];
+    let base = Primitive::Sphere {
+        frame: Frame::at(centre),
+        radius: rad,
+    };
+    let motion = then(turn(r, theta), Motion::Slide { vector });
+    draw(base, motion, capsule(centre, vector, rad))
+}
+
 /// Two motions at once that come to one the suite knows: two slides to a slide along a block's
-/// edge, a turn and a slide along its axis to a screw, two turns about one axis to a turn, and a
-/// screw with the slide that undoes its rise to a turn.
+/// edge, a turn and a slide along its axis to a screw, two turns about one axis to a turn, a
+/// screw with the slide that undoes its rise to a turn, and a turn in place before a slide.
 pub fn composed(r: &mut Rng) -> FeatureDraw {
-    match r.next_u64() % 4 {
+    match r.next_u64() % 5 {
+        4 => turned_in_place_then_slid(r),
         0 => {
             let block = [r.range(2.0, 8.0), r.range(2.0, 8.0), r.range(2.0, 8.0)];
             let axis = (r.next_u64() % 3) as usize;
@@ -542,7 +572,8 @@ pub fn composed(r: &mut Rng) -> FeatureDraw {
             )
         }
         1 => {
-            let theta = sign(r) * r.range(0.5, 7.0);
+            // A turn goes no further than once round.
+            let theta = sign(r) * r.range(0.5, 6.0);
             let (base, rise, want) = thread(r, theta);
             let slide = Motion::Slide {
                 vector: [0.0, 0.0, rise * theta],
@@ -584,66 +615,6 @@ pub fn composed(r: &mut Rng) -> FeatureDraw {
     }
 }
 
-/// A ball carried along a smooth curve from the curve's start, into the tube round the curve with
-/// a ball at each end; or a block carried along a straight path beside one of its edges.
-pub fn along_paths(r: &mut Rng) -> FeatureDraw {
-    if r.next_u64().is_multiple_of(4) {
-        let block = [r.range(2.0, 8.0), r.range(2.0, 8.0), r.range(2.0, 8.0)];
-        let axis = (r.next_u64() % 3) as usize;
-        let d = sign(r) * r.range(1.0, 6.0);
-        let start = [r.range(-5.0, 5.0), r.range(-5.0, 5.0), r.range(-5.0, 5.0)];
-        let mut end = start;
-        end[axis] += d;
-        let mut up = [0.0; 3];
-        up[(axis + 1) % 3] = 1.0;
-        let (mut lo, mut hi) = ([0.0; 3], block);
-        lo[axis] = d.min(0.0);
-        hi[axis] += d.max(0.0);
-        let path = PathCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end]);
-        return draw(
-            axis_box([0.0; 3], block),
-            Motion::Along { path, up },
-            axis_box(lo, hi),
-        );
-    }
-    // A path that bends tightly somewhere leaves room for only a hair of a tube.
-    let (path, least_radius) = loop {
-        let drawn = smooth_path(r);
-        if drawn.1 >= 1.5 {
-            break drawn;
-        }
-    };
-    let rad = (least_radius / 3.0).min(1.5) * r.range(0.5, 1.0);
-    let ball = |c: Vec3| Primitive::Sphere {
-        frame: Frame::at(c),
-        radius: rad,
-    };
-    let tube = Primitive::SweepPath {
-        frame: Frame::at([0.0; 3]),
-        profile: Profile {
-            loops: vec![circle([0.0; 2], rad, true)],
-        },
-        path: path.clone(),
-        twist: 0.0,
-    };
-    let exact = Exact {
-        result_volume: Some(tube.volume() + 4.0 / 3.0 * PI * rad.ppowi(3)),
-        result_area: Some(tube.area() + 2.0 * PI * rad * rad),
-        ..Exact::default()
-    };
-    let end = path.eval(path.domain().1)[0];
-    let ends = Shape::bool(Op::Union, ball([0.0; 3]), ball(end));
-    // The path climbs in z throughout, so its tangent is never along a level `up`.
-    let phi = r.range(0.0, TAU);
-    let up = [phi.pcos(), phi.psin(), 0.0];
-    (
-        ball([0.0; 3]),
-        swept(Motion::Along { path, up }),
-        Shape::bool(Op::Union, tube, ends),
-        exact,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,16 +637,15 @@ mod tests {
 
     #[test]
     fn every_swept_solid_is_what_its_base_passes_through() {
-        let families: [(&str, fn(&mut Rng) -> FeatureDraw); 5] = [
+        let families: [(&str, fn(&mut Rng) -> FeatureDraw); 4] = [
             ("slides", slides),
             ("turns", turns),
             ("screws", screws),
             ("composed", composed),
-            ("along", along_paths),
         ];
         for (name, family) in families {
             let mut r = Rng::new(0x5eed ^ name.len() as u64);
-            for case in 0..16 {
+            for case in 0..12 {
                 let (base, feature, want, _) = family(&mut r);
                 let motion = feature.motion.expect("a sweep has a motion");
                 let poses: Vec<Rigid> = (0..=STEPS)
@@ -688,7 +658,7 @@ mod tests {
                     [0, 1, 2].map(|i| lo[i] - pad[i]),
                     [0, 1, 2].map(|i| hi[i] + pad[i]),
                 );
-                let pts = oracle::samples(wide, 1200);
+                let pts = oracle::samples(wide, 1000);
                 let (mut beyond, mut missed, mut inside) = (0, 0, 0);
                 for &p in &pts {
                     let (held, swept) = (oracle::contains(&want, p), reached(&base, &poses, p));

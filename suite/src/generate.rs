@@ -1167,14 +1167,8 @@ pub const FEATURE_FAMILIES: &[FeatureFamily] = &[
     FeatureFamily {
         name: "swept-composed",
         version: 1,
-        count: 16,
+        count: 20,
         draw: sweeps::composed,
-    },
-    FeatureFamily {
-        name: "swept-along-paths",
-        version: 1,
-        count: 12,
-        draw: sweeps::along_paths,
     },
     FeatureFamily {
         name: "chamfer-uneven-corners",
@@ -4596,9 +4590,11 @@ fn sweeps(r: &mut Rng) -> (Primitive, Primitive, Exact) {
     (a, b, Exact::default())
 }
 
-/// A cubic B-spline from the origin, heading up z and climbing in it with a sideways wander, and
-/// its least radius of curvature.
-fn smooth_path(r: &mut Rng) -> (brep_protocol::path::PathCurve, f64) {
+/// A disc, a rounded square or an off-centre disc swept along a cubic B-spline climbing in z with
+/// a sideways wander, half the time twisted through up to half a turn; crossed by a ball or block
+/// through its middle. The profile reaches no more than a third of the least radius of curvature
+/// from the path, so the sweep never folds over itself.
+fn path_sweeps(r: &mut Rng) -> (Primitive, Primitive, Exact) {
     use brep_protocol::path::PathCurve;
     let n = 5 + (r.next_u64() % 3) as usize;
     let mut ctrl = vec![[0.0; 3], [0.0, 0.0, r.range(1.5, 3.0)]];
@@ -4624,15 +4620,6 @@ fn smooth_path(r: &mut Rng) -> (brep_protocol::path::PathCurve, f64) {
             speed.ppowi(3) / (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().max(1e-300)
         })
         .fold(f64::INFINITY, f64::min);
-    (path, rho_min)
-}
-
-/// A disc, a rounded square or an off-centre disc swept along a cubic B-spline climbing in z with
-/// a sideways wander, half the time twisted through up to half a turn; crossed by a ball or block
-/// through its middle. The profile reaches no more than a third of the least radius of curvature
-/// from the path, so the sweep never folds over itself.
-fn path_sweeps(r: &mut Rng) -> (Primitive, Primitive, Exact) {
-    let (path, rho_min) = smooth_path(r);
     let reach = (rho_min / 3.0).min(1.5);
     let profile = match r.next_u64() % 3 {
         0 => Profile {
@@ -8028,13 +8015,13 @@ mod tests {
     fn the_default_seed_draws_the_same_ids_on_every_platform() {
         let ids: Vec<String> = cases(1).into_iter().map(|c| c.id).collect();
         let got = format!("{:016x}", fnv(&ids.join("\n")));
-        if got != "d62347545b2edda7" {
+        if got != "86138a1cd3d791f9" {
             // Every id, so a run elsewhere can be compared with this one case by case.
             for id in &ids {
                 eprintln!("id {id}");
             }
         }
-        assert_eq!(got, "d62347545b2edda7");
+        assert_eq!(got, "86138a1cd3d791f9");
     }
 
     #[test]

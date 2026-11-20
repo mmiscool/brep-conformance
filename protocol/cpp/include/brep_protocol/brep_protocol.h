@@ -270,17 +270,13 @@ struct ScrewMotion {
     double rise;
     double angle;
 };
-struct AlongMotion {
-    Spline3 path;
-    Vec3 up;
-};
 // At `τ` the solid is where `first` puts it, moved by `second`.
 struct ThenMotion {
     std::shared_ptr<const Motion> first;
     std::shared_ptr<const Motion> second;
 };
 struct Motion {
-    std::variant<SlideMotion, TurnMotion, ScrewMotion, AlongMotion, ThenMotion> kind;
+    std::variant<SlideMotion, TurnMotion, ScrewMotion, ThenMotion> kind;
 };
 
 // Where a point lies against a solid: inside it, on its boundary, or outside it.
@@ -871,12 +867,12 @@ inline Motion motion(const Json& v) {
         return Motion{ScrewMotion{
             vec3_at(s, "origin"), vec3_at(s, "axis"), num(s, "rise"), num(s, "angle")}};
     }
-    if (v.is_object() && v.contains("along")) {
-        const Json& a = v["along"];
-        return Motion{AlongMotion{spline3(at(a, "path")), vec3_at(a, "up")}};
-    }
     if (!v.is_object() || !v.contains("then")) {
-        throw Refusal::failed("a motion is a `slide`, a `turn`, a `screw`, an `along` or a `then`");
+        // A kind this version does not know is one the adapter cannot do.
+        if (v.is_object() && !v.empty()) {
+            throw Refusal::unsupported("unknown motion `" + v.begin().key() + "`");
+        }
+        throw Refusal::failed("a motion is a `slide`, a `turn`, a `screw` or a `then`");
     }
     const auto& pair = list(v["then"], "then");
     if (pair.size() != 2) {

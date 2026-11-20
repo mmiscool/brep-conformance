@@ -107,12 +107,6 @@ Json motion(const Motion& m) {
                       {"rise", screw->rise},
                       {"angle", screw->angle}}}};
     }
-    if (const auto* along = std::get_if<AlongMotion>(&m.kind)) {
-        const Json path{{"degree", along->path.degree},
-                        {"knots", along->path.knots},
-                        {"ctrl", along->path.ctrl}};
-        return Json{{"along", {{"path", path}, {"up", along->up}}}};
-    }
     const auto& then = std::get<ThenMotion>(m.kind);
     return Json{{"then", Json::array({motion(*then.first), motion(*then.second)})}};
 }
