@@ -12,7 +12,7 @@ Each group of functions opens with a table of its commands. The definitions foll
 
 A kernel takes part by shipping an **adapter**, a program that answers these calls with the kernel's
 own functions. The suite runs the adapter as one or more **worker** processes, so the client never
-links the kernel. This is version 1.0.0 of the protocol.
+links the kernel. This is version 1.1.0 of the protocol.
 
 ### Lifecycle
 
@@ -147,6 +147,7 @@ program in any language can answer.
 | `Profile`   | `list<Loop>`                                                 | The outer loop, counter-clockwise, then holes, clockwise    |
 | `Path`      | `list<PathPiece>`                                            | Runs and bends end to end, each leaving as the last arrived |
 | `Spline3`   | `{degree: integer, knots: list<Number>, ctrl: list<Point3>}` | A clamped B-spline curve in space                           |
+| `Motion`    | One of the motions below                                     | A rigid motion over a parameter `τ` from 0 to 1             |
 | `Solid`     | `integer`                                                    | A handle, 1 or more, to a solid set the kernel holds        |
 
 A `Segment` is one of:
@@ -165,6 +166,16 @@ A `PathPiece` is one of:
 | ------ | --------------------------------------- | ----------------------------- |
 | `line` | `{line: Length}`                        | A straight run of that length |
 | `arc`  | `{arc: {radius: Length, angle: Angle}}` | A bend of `angle` at `radius` |
+
+A `Motion` is one of:
+
+| Motion  | Format                                                                 | Meaning                                         |
+| ------- | ---------------------------------------------------------------------- | ----------------------------------------------- |
+| `slide` | `{slide: Vector3}`                                                     | Straight by the vector, whose length is in mm   |
+| `turn`  | `{turn: {origin: Point3, axis: Vector3, angle: Angle}}`                | About an axis by `angle`                        |
+| `screw` | `{screw: {origin: Point3, axis: Vector3, rise: Length, angle: Angle}}` | About an axis by `angle`, moving along the axis |
+| `along` | `{along: {path: Spline3, up: Vector3}}`                                | In a frame that rides `path` from end to end    |
+| `then`  | `{then: Motion[2]}`                                                    | The first motion, moved by the second           |
 
 A `spline` segment's `ctrl` lists the `n` points of one period, followed by the first `degree` of
 those points again. Its `knots` hold `n + 2·degree + 1` values, which run `degree` values past each
@@ -208,6 +219,23 @@ is curvature-continuous with the leg. Its **equal-area thumbweight** is the `w` 
 removes from the triangle on its legs the same area that the circle tangent to both legs at `a` and
 `b` removes. "Thumbweight" is the name this shape parameter has in parametric Gⁿ blending (E.
 Hartmann, "Parametric Gⁿ blending of curves and surfaces", The Visual Computer 17, 2001, pp. 1–13).
+
+A **motion** gives a rigid motion `M(τ)` for each `τ` from 0 to 1, and `M(0)` leaves every point
+where it is.
+
+- A `slide` moves each point by `τ·vector`.
+- A `turn` turns each point right-handed by `τ·angle` about the line through `origin` along `axis`.
+  `angle` may have either sign.
+- A `screw` turns as a `turn` does, and also moves each point `rise·τ·angle` along `axis`. `rise` is
+  per radian, as it is in [`screw`](#screw), and may have either sign.
+- An `along` carries each point with a frame that rides `path`. At the path's point `γ(t)` the
+  frame's origin is `γ(t)`, its x axis is the path's unit tangent `T`, its z axis is the unit vector
+  along `up − (up·T)·T`, and its y axis is `z × x`. Let `F(t)` be the rigid motion that takes the
+  world's origin and axes to that frame. Then `M(τ) = F(t)·F(t₀)⁻¹`, with `t` running evenly from
+  the start `t₀` of the path's parameter range to its end. The path's tangent must never be zero or
+  parallel to `up`.
+- A `then` of the motions `P` and `Q` is `M(τ) = Q(τ)·P(τ)`: each point goes where `P` puts it at
+  `τ`, and is then moved by `Q` at the same `τ`.
 
 A profile's **region** `Ω` is the set of points about which the winding numbers of the profile's
 loops sum to a nonzero value, together with the boundary of that set. No loop may cross another loop
@@ -939,6 +967,7 @@ within `10·ε`.
 | [`thicken`](#thicken)           | `s`, `faces`, `thickness`               | `Solid` |
 | [`shell`](#shell)               | `s`, `open`, `thickness`                | `Solid` |
 | [`draft`](#draft)               | `s`, `faces`, `origin`, `pull`, `angle` | `Solid` |
+| [`sweep_solid`](#sweep_solid)   | `s`, `motion`                           | `Solid` |
 
 ### offset
 
@@ -1077,6 +1106,27 @@ planes.
 ```text
 > {"cmd": "draft", "s": 1, "faces": [[0, 10, 15]], "origin": [0, 0, 0], "pull": [0, 0, 1],
    "angle": 0.05}
+< {"ok": 2}
+```
+
+### sweep_solid
+
+`sweep_solid(s: Solid, motion: Motion) -> Solid`
+
+Makes everything a solid passes through as it moves, like the space a tool or a moving part needs.
+
+`s` must not be empty. A `slide`'s vector must not be zero. A `turn`'s angle must not be zero and
+must be at most `2π` either way, and a `screw`'s angle must not be zero. The result is the union of
+`M(τ)(s)` over `0 ≤ τ ≤ 1`: the points `M(τ)(p)` for every point `p` of `s` and every such `τ`. It
+holds `s` itself, at `τ = 0`. A solid slid along a direction in which it is a prism, or turned about
+an axis round which it is a body of revolution, moves within itself there, so the result is `s`
+together with what its ends pass through.
+
+**Example.** Solid 1 is a 10 × 20 × 30 mm box with one corner at the origin. The result is the box
+of 10 × 20 × 45 mm.
+
+```text
+> {"cmd": "sweep_solid", "s": 1, "motion": {"slide": [0, 0, 15]}}
 < {"ok": 2}
 ```
 

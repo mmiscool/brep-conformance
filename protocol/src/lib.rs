@@ -4,6 +4,7 @@
 //! [`Remote`], an implementation that forwards each call to a worker process speaking it.
 
 pub mod model;
+pub mod motion;
 pub mod path;
 pub mod portable;
 pub mod profile;
@@ -12,6 +13,7 @@ mod serve;
 mod wire;
 
 pub use model::Op;
+pub use motion::Motion;
 pub use remote::Remote;
 
 pub use serve::serve;
@@ -20,7 +22,7 @@ use model::{Frame, Primitive, Side, Vec3};
 
 /// The protocol's version, which `hello` reports: requests and replies in
 /// [doc/api.md](../../doc/api.md#calling-a-kernel).
-pub const PROTOCOL_VERSION: &str = "1.0.0";
+pub const PROTOCOL_VERSION: &str = "1.1.0";
 
 /// Every function of this version of the protocol, in the order of
 /// [doc/api.md](../../doc/api.md). `hello` lists the ones a kernel offers out of these.
@@ -62,6 +64,7 @@ pub const FUNCTIONS: &[&str] = &[
     "thicken",
     "shell",
     "draft",
+    "sweep_solid",
     "write_step",
     "sew",
     "read_step",
@@ -587,6 +590,11 @@ pub trait Kernel {
         _angle: f64,
     ) -> Result<Self::Solid, Refusal> {
         Err(Refusal::unsupported("draft is not supported"))
+    }
+    /// Everything the solid passes through as `motion` carries it, `τ` from 0 to 1: the union of
+    /// the solid at every `τ`.
+    fn sweep_solid(&mut self, _s: &Self::Solid, _motion: &Motion) -> Result<Self::Solid, Refusal> {
+        Err(Refusal::unsupported("sweep_solid is not supported"))
     }
     /// The solid moved by `p ↦ M·p + t`, the rows of `matrix` being `[M | t]`, `M` a rotation or
     /// mirror times a nonzero scale.

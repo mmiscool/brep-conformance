@@ -3,6 +3,8 @@
 use serde_json::Value;
 
 use crate::model::{Frame, PathSeg, Primitive, Spline, Vec3};
+use crate::motion::Motion;
+use crate::path::PathCurve;
 use crate::profile::{Profile, Seg};
 
 fn num(v: &Value, key: &str) -> Result<f64, String> {
@@ -46,6 +48,58 @@ pub(crate) fn frame(v: &Value) -> Result<Frame, String> {
         y: vec3(&v["y"])?,
         z: vec3(&v["z"])?,
     })
+}
+
+fn spline3(v: &Value) -> Result<PathCurve, String> {
+    Ok(PathCurve {
+        degree: integer(&v["degree"]).ok_or("`degree` is not a whole number")? as usize,
+        knots: nums(&v["knots"])?,
+        ctrl: v["ctrl"]
+            .as_array()
+            .ok_or("`ctrl` is not an array")?
+            .iter()
+            .map(vec3)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+impl Motion {
+    pub fn from_json(v: &Value) -> Result<Motion, String> {
+        if let Some(d) = v.get("slide") {
+            return Ok(Motion::Slide { vector: vec3(d)? });
+        }
+        if let Some(t) = v.get("turn") {
+            return Ok(Motion::Turn {
+                origin: vec3(&t["origin"])?,
+                axis: vec3(&t["axis"])?,
+                angle: num(t, "angle")?,
+            });
+        }
+        if let Some(s) = v.get("screw") {
+            return Ok(Motion::Screw {
+                origin: vec3(&s["origin"])?,
+                axis: vec3(&s["axis"])?,
+                rise: num(s, "rise")?,
+                angle: num(s, "angle")?,
+            });
+        }
+        if let Some(a) = v.get("along") {
+            return Ok(Motion::Along {
+                path: spline3(&a["path"])?,
+                up: vec3(&a["up"])?,
+            });
+        }
+        let pair = v
+            .get("then")
+            .ok_or("a motion is a `slide`, a `turn`, a `screw`, an `along` or a `then`")?;
+        let [first, second] = pair.as_array().map_or(&[][..], Vec::as_slice) else {
+            return Err("a `then` is two motions".into());
+        };
+        Ok(Motion::Then(
+            Box::new(Motion::from_json(first)?),
+            Box::new(Motion::from_json(second)?),
+        ))
+    }
 }
 
 fn seg(v: &Value) -> Result<Seg, String> {
@@ -201,26 +255,12 @@ impl Primitive {
                         })
                         .collect::<Result<_, String>>()?,
                 },
-                "sweep_path" => {
-                    let path = &v["path"];
-                    Primitive::SweepPath {
-                        frame,
-                        profile: profile()?,
-                        path: crate::path::PathCurve {
-                            degree: integer(&path["degree"])
-                                .ok_or("`degree` is not a whole number")?
-                                as usize,
-                            knots: nums(&path["knots"])?,
-                            ctrl: path["ctrl"]
-                                .as_array()
-                                .ok_or("`ctrl` is not an array")?
-                                .iter()
-                                .map(vec3)
-                                .collect::<Result<_, _>>()?,
-                        },
-                        twist: v["twist"].as_f64().ok_or("`twist` is not a number")?,
-                    }
-                }
+                "sweep_path" => Primitive::SweepPath {
+                    frame,
+                    profile: profile()?,
+                    path: spline3(&v["path"])?,
+                    twist: v["twist"].as_f64().ok_or("`twist` is not a number")?,
+                },
                 "slab" => Primitive::Slab {
                     frame,
                     size: vec2(&v["size"])?,
