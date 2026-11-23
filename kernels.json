@@ -8,7 +8,7 @@
       "maintained_by_suite": false,
       "adapter": {
         "repo": "https://github.com/gntech/brep-conformance-anvilcad",
-        "commit": "68907b3696ada3163136393663cab6288f604d1f",
+        "commit": "92988866ebaf0808c4b08eddb54affa457c3941e",
         "license": "MIT",
         "build": ["cargo build --release --locked"],
         "run": "{dir}/target/release/anvilcad-adapter"
