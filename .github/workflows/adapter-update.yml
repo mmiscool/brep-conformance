@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+# Moves adapters the suite maintains to newer releases of their kernels, and has Claude make each
+# adapter use what its release changed. Opens a pull request in each adapter's repository and
+# merges nothing; the Registry update workflow moves kernels.json once they merge: bench/README.md.
+name: Adapter update
+run-name: Adapter update · ${{ inputs.kernels || 'all' }}${{ inputs.dry_run && ' · dry run' || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernels:
+        description: all, or the kernels to update, comma-separated, as kernels.json names them
+        type: string
+        default: all
+      version:
+        description: The release to move to, for one kernel; empty for each one's newest
+        type: string
+        default: ''
+      claude:
+        description: Have Claude make each adapter use its release; untick for the pins alone
+        type: boolean
+        default: true
+      dry_run:
+        description: Open no pull request; keep each change and report as the run's artifacts
+        type: boolean
+        default: false
+
+# A job with no permissions block inherits these, so a job added later gets nothing by default.
+permissions: {}
+
+concurrency:
+  group: adapter-update
+  cancel-in-progress: false
+
+jobs:
+  # Runs nothing it fetches: a bad input fails here, before any build.
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      kernels: ${{ steps.plan.outputs.kernels }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Check the inputs and name the kernels
+        id: plan
+        env:
+          KERNELS: ${{ inputs.kernels }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          kernels=$(python3 -I bench/adapter_update.py kernels . "$KERNELS")
+          if [ -n "$VERSION" ] && [ "$(jq length <<<"$kernels")" != 1 ]; then
+              echo "::error::a version names one kernel's release; name that one kernel"
+              exit 1
+          fi
+          echo "kernels=$kernels" >> "$GITHUB_OUTPUT"
+          echo "Kernels: $(jq -r 'join(", ")' <<<"$kernels")" >> "$GITHUB_STEP_SUMMARY"
+
+  update:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ${{ fromJSON(needs.plan.outputs.kernels) }}
+    permissions:
+      contents: read
+      id-token: write # for the Claude API's workload identity federation, in the adapt job only
+    uses: ./.github/workflows/adapter-update-kernel.yml
+    with:
+      kernel: ${{ matrix.kernel }}
+      version: ${{ inputs.version }}
+      claude: ${{ inputs.claude }}
+      dry_run: ${{ inputs.dry_run }}

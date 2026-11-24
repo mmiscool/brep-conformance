@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: MIT
+# Moves the kernels.json entries of adapters the suite maintains to each adapter's main and the
+# kernel release it pins, in one pull request. It merges the pull request once its checks pass if
+# the App may bypass review on main, and leaves it for review if not: bench/README.md.
+name: Registry update
+run-name: Registry update · ${{ inputs.kernels || 'all' }}${{ inputs.dry_run && ' · dry run' || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernels:
+        description: all, or the kernels to move, comma-separated, as kernels.json names them
+        type: string
+        default: all
+      dry_run:
+        description: Open no pull request; say what would move
+        type: boolean
+        default: false
+
+# A job with no permissions block inherits these, so a job added later gets nothing by default.
+permissions: {}
+
+concurrency:
+  group: registry-update
+  cancel-in-progress: false
+
+jobs:
+  # Builds nothing: each adapter's release is read from the pin in its manifest, which the adapter's
+  # own pull request checked against the release it reports.
+  propose:
+    runs-on: ubuntu-24.04
+    environment: adapter-update
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      checks: read # to wait for the pull request's checks
+      pull-requests: read
+    steps:
+      # The push below takes the App's token; a persisted read-only one would be sent instead.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Move each entry to its adapter's main
+        id: move
+        env:
+          KERNELS: ${{ inputs.kernels }}
+        run: |
+          rows="$RUNNER_TEMP/rows.md"
+          : > "$rows"
+          moved=() unread=()
+          for kernel in $(python3 -I bench/adapter_update.py kernels . "$KERNELS" | jq -r '.[]'); do
+              read -r was was_commit repo <<<"$(jq -r --arg k "$kernel" '.kernels[]
+                  | select(.kernel == $k) | "\(.version) \(.adapter.commit) \(.adapter.repo)"' \
+                  kernels.json)"
+              dir="$RUNNER_TEMP/adapters/$kernel"
+              git clone -q --depth 1 "$repo" "$dir"
+              commit=$(git -C "$dir" rev-parse HEAD)
+              if ! version=$(python3 -I bench/adapter_update.py pinned "$dir"); then
+                  unread+=("$kernel")
+                  continue
+              fi
+              if [ "$(python3 -I bench/adapter_update.py registry . "$kernel" "$version" \
+                  "$commit")" = same ]; then
+                  continue
+              fi
+              moved+=("$kernel $version")
+              echo "| $kernel | \`$was\` → \`$version\` | [\`${was_commit::7}\` →" \
+                  "\`${commit::7}\`]($repo/compare/$was_commit...$commit) |" >> "$rows"
+          done
+          if [ "${#moved[@]}" = 0 ]; then
+              echo "Every entry is at its adapter's main already" | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "open=false" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          names=$(printf '%s\n' "${moved[@]}" | paste -sd, - | sed 's/,/, /g')
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+              echo "Moves each adapter the suite maintains to its \`main\`, with the kernel release"
+              echo "it pins. Each adapter's changes were reviewed in its own repository."
+              echo
+              echo "| Kernel | Version | Adapter commit |"
+              echo "| --- | --- | --- |"
+              cat "$rows"
+              echo
+              if [ "${#unread[@]}" -gt 0 ]; then
+                  echo "Not moved, since the adapter's \`main\` pins no release:" \
+                      "${unread[*]}."
+                  echo
+              fi
+              echo "Opened by the [Registry update]($run) workflow."
+          } > "$RUNNER_TEMP/body.md"
+          echo "title=[registry] Move $names, each adapter pinned at its main" >> "$GITHUB_OUTPUT"
+          echo "open=true" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/body.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open the pull request, and merge it once its checks pass
+        if: steps.move.outputs.open == 'true' && !inputs.dry_run
+        env:
+          APP_CLIENT_ID: ${{ vars.ADAPTER_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.ADAPTER_APP_PRIVATE_KEY }}
+          TITLE: ${{ steps.move.outputs.title }}
+          GH_REPO: ${{ github.repository }}
+          READ_TOKEN: ${{ github.token }}
+        run: |
+          token=$(bench/app-token.sh '{"contents": "write", "pull_requests": "write"}')
+          echo "::add-mask::$token"
+          branch="registry/update-$GITHUB_RUN_ID"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -q -c "$branch"
+          git add kernels.json
+          git commit -q -m "$TITLE"
+          git push -q "https://x-access-token:$token@github.com/$GITHUB_REPOSITORY.git" "$branch"
+          url=$(GH_TOKEN=$token gh pr create --base main --head "$branch" --title "$TITLE" \
+              --body-file "$RUNNER_TEMP/body.md")
+          echo "$url" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # The checks take a moment to register; then wait for all of them to finish.
+          deadline=$((SECONDS + 300))
+          until GH_TOKEN=$READ_TOKEN gh pr checks "$url" > /dev/null 2>&1 || [ $? = 8 ]; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "::error::no checks reported on $url"
+                  exit 1
+              fi
+              sleep 5
+          done
+          if ! GH_TOKEN=$READ_TOKEN gh pr checks "$url" --watch --interval 20 > /dev/null; then
+              echo "::error::a check failed on $url; it waits for review" \
+                  | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+          fi
+          if GH_TOKEN=$token gh pr merge "$url" --squash --delete-branch; then
+              echo "Merged" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+              echo "::warning::the App may not merge $url; it waits for review"
+              echo "Waits for review: the App may not merge it" >> "$GITHUB_STEP_SUMMARY"
+          fi
