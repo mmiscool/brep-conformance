@@ -77,13 +77,13 @@
     },
     {
       "kernel": "next.BREP",
-      "version": "0.24.0",
+      "version": "0.28.0",
       "license": "LicenseRef-Autodrop3d",
       "source": "https://github.com/mmiscool/next.BREP.io_RUST_BREP_KERNEL",
       "maintained_by_suite": false,
       "adapter": {
         "repo": "https://github.com/springcraft-ai/brep-conformance-next-brep",
-        "commit": "7d1d9f6586af3fc3d0d9bfecc9335aff0b2c6894",
+        "commit": "de32a14d0b8565d4309f25b04addc4a7946392c9",
         "license": "MIT OR Apache-2.0",
         "build": ["cargo build --release --locked"],
         "run": "{dir}/target/release/next-brep-adapter"
