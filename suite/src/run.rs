@@ -2277,29 +2277,26 @@ fn to_piece(q: [f64; 2], p: &crate::generate::Piece, flat: &dyn Fn(Vec3) -> [f64
     }
     let n = 128;
     let t = |j: usize| p.t0 + (p.t1 - p.t0) * j as f64 / n as f64;
-    let best = (0..=n)
+    let whole = matches!(p.curve, Curve3::Circle { .. }) && (p.t1 - p.t0).abs() >= 1.0;
+    let best = (0..if whole { n } else { n + 1 })
         .min_by(|&i, &j| gap2(q, at(t(i))).total_cmp(&gap2(q, at(t(j)))))
         .unwrap_or(0);
-    let search = |mut lo: f64, mut hi: f64| {
-        for _ in 0..60 {
-            let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
-            if gap2(q, at(m1)) < gap2(q, at(m2)) {
-                hi = m2;
-            } else {
-                lo = m1;
-            }
-        }
-        gap2(q, at((lo + hi) / 2.0))
+    // A whole circle is periodic: its bracket runs past the seam instead of stopping at it.
+    let (mut lo, mut hi) = if whole {
+        let h = (p.t1 - p.t0) / n as f64;
+        (t(best) - h, t(best) + h)
+    } else {
+        (t(best.saturating_sub(1)), t((best + 1).min(n)))
     };
-    let near = search(t(best.saturating_sub(1)), t((best + 1).min(n)));
-    // A whole circle's samples 0 and n are one point, and rounding decides which is the nearer: a
-    // point just short of the seam must be sought on that side of it too.
-    let whole = matches!(p.curve, Curve3::Circle { .. }) && (p.t1 - p.t0).abs() >= 1.0;
-    match best {
-        0 if whole => near.min(search(t(n - 1), t(n))),
-        b if b == n && whole => near.min(search(t(0), t(1))),
-        _ => near,
+    for _ in 0..60 {
+        let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+        if gap2(q, at(m1)) < gap2(q, at(m2)) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
     }
+    gap2(q, at((lo + hi) / 2.0))
 }
 
 /// B38: a hidden-line projection draws, seen and hidden apart, every vertex on a curve of its kind,
@@ -4011,7 +4008,7 @@ mod tests {
     /// sample 0, the search must still look on the side of the seam the point is on. Circles in many
     /// frames, so the rounding falls both ways.
     #[test]
-    fn a_point_just_short_of_a_closed_piece_s_seam_lies_on_it() {
+    fn a_point_just_short_of_a_whole_circle_s_seam_lies_on_it() {
         use crate::generate::{Curve3, Piece};
         let flat = |p: Vec3| [p[0], p[1]];
         let mut worst = (0.0_f64, 0usize, 0.0_f64);
@@ -4031,7 +4028,13 @@ mod tests {
                 }
             }
         }
-        assert!(worst.0 < 1e-9, "frame {} at t = {}: a point on the circle reads {:e} from it", worst.1, worst.2, worst.0);
+        assert!(
+            worst.0 < 1e-9,
+            "frame {} at t = {}: a point on the circle reads {:e} from it",
+            worst.1,
+            worst.2,
+            worst.0
+        );
     }
 
     #[test]
